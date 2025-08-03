@@ -1,0 +1,24 @@
+.{
+    .name = .jhub,
+    .version = "0.0.1-dev",
+    .fingerprint = 0xc2efdf24c52d42e5, // changing this value has trust implications
+    .minimum_zig_version = "0.15.0-dev.1283",
+    .dependencies = .{
+        .hidapi = .{
+            .url = "git+https://github.com/libusb/hidapi#f18d2c0768bed300d13758dd9f52b57163c0498f",
+            .hash = "N-V-__8AAKPSHQAS89i34T_WQX-tm6CK0y3tJcZiFU4DB_Im",
+        },
+        // only used for the Linux backend
+        .libusb = .{
+            .url = "git+https://github.com/jjkh/libusb#8b7db0b1c70b10bbaa4aa12ee75694f193af62f5",
+            .hash = "libusb-1.0.26-qNnTWgCNFwAhSdoCWfPbt6bAgv2JMzLH4WjpMpcUlpcl",
+            .lazy = true,
+        },
+    },
+    .paths = .{
+        "src/main.zig",
+        "build.zig",
+        "build.zig.zon",
+        "README.md",
+    },
+}
