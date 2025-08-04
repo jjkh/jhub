@@ -1,34 +1,108 @@
 const std = @import("std");
 const c = @cImport(@cInclude("hidapi.h"));
+const args = @import("args");
+
+const options = @import("options");
+pub const std_options: std.Options = .{
+    .log_level = if (options.log_level) |ll|
+        @enumFromInt(ll)
+    else
+        std.log.default_level,
+};
 
 const HidDevice = c.hid_device_;
 const HidDeviceInfo = c.hid_device_info;
+
+const HidBusType = enum(c_uint) {
+    unknown = c.HID_API_BUS_UNKNOWN,
+    usb = c.HID_API_BUS_USB,
+    bluetooth = c.HID_API_BUS_BLUETOOTH,
+    i2c = c.HID_API_BUS_I2C,
+    spi = c.HID_API_BUS_SPI,
+    virtual = c.HID_API_BUS_VIRTUAL,
+    _,
+};
 
 const GPRO_VENDOR_ID = 0x046D;
 const GPRO_PRODUCT_ID = 0xC339;
 
 pub fn main() !void {
+    defer std.process.cleanExit();
+
+    // get an "auto" allocator
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    const gpa, const is_debug = gpa: {
+        const builtin = @import("builtin");
+        if (builtin.os.tag == .wasi) break :gpa .{ std.heap.wasm_allocator, false };
+        break :gpa switch (builtin.mode) {
+            .Debug, .ReleaseSafe => .{ debug_allocator.allocator(), true },
+            .ReleaseFast, .ReleaseSmall => .{ std.heap.smp_allocator, false },
+        };
+    };
+    defer if (is_debug) {
+        _ = debug_allocator.deinit();
+    };
+
+    // parse some args
+    const parsed_opts = args.parseForCurrentProcess(struct {
+        list: bool = false,
+        @"no-open-device": bool = false,
+        @"dump-descriptors": bool = false,
+        @"log-level": std.log.Level = std.log.default_level,
+
+        pub const shorthands = .{
+            .l = "list",
+            .n = "no-open-device",
+            .d = "dump-descriptors",
+        };
+    }, gpa, .print) catch return error.InvalidArgs;
+    defer parsed_opts.deinit();
+    const opts = parsed_opts.options;
+
     std.log.debug("Opening HID library...", .{});
     try handleResult(c.hid_init(), null);
-    defer handleResult(c.hid_exit(), null) catch {};
+    defer logResult(c.hid_exit(), null);
 
-    std.log.debug("Enumerating devices with vid=0x{X:0>4} and pid=0x{X:0>4}...", .{ GPRO_VENDOR_ID, GPRO_PRODUCT_ID });
-    const first_dev_info = c.hid_enumerate(GPRO_VENDOR_ID, GPRO_PRODUCT_ID) orelse
-        return handleResult(-1, null);
+    const first_dev_info = blk: {
+        if (opts.list) {
+            std.log.info("Enumerating ALL HID devices...", .{});
+            break :blk c.hid_enumerate(0, 0) orelse return handleResult(-1, null);
+        } else {
+            std.log.info("Enumerating devices with vid=0x{X:0>4} and pid=0x{X:0>4}...", .{ GPRO_VENDOR_ID, GPRO_PRODUCT_ID });
+            break :blk c.hid_enumerate(GPRO_VENDOR_ID, GPRO_PRODUCT_ID) orelse return handleResult(-1, null);
+        }
+    };
     defer c.hid_free_enumeration(first_dev_info);
 
     var next_dev_info: ?*HidDeviceInfo = @ptrCast(first_dev_info);
     while (next_dev_info) |dev_info| : (next_dev_info = dev_info.next) {
-        std.log.debug("{any}", .{dev_info});
-        const dev = c.hid_open_path(dev_info.path) orelse
-            return handleResult(-1, null);
+        logDeviceInfo(dev_info);
+
+        if (opts.@"no-open-device") continue;
+        const dev = c.hid_open_path(dev_info.path) orelse {
+            logResult(-1, null);
+            continue;
+        };
         defer c.hid_close(dev);
 
-        try dumpData(dev);
+        if (!opts.@"dump-descriptors") continue;
+        try dumpDeviceData(dev);
     }
 }
 
-fn dumpData(dev: *HidDevice) !void {
+fn logDeviceInfo(dev_info: *const HidDeviceInfo) void {
+    std.log.info("VID=0x{X:0>4}&PID=0x{X:0>4} ({s})", .{ dev_info.vendor_id, dev_info.product_id, dev_info.path.? });
+    std.log.info("    Serial Number: {f}", .{fmtApiString(dev_info.serial_number)});
+    // std.log.info("    Serial Number: {f}", .{fmtApiString(dev_info.serial_number)});
+    std.log.info("    Manufacturer String: {f}", .{fmtApiString(dev_info.manufacturer_string)});
+    std.log.info("    Product String: {f}", .{fmtApiString(dev_info.product_string)});
+    std.log.info("    Usage Page: {d}, Usage: {d}", .{ dev_info.usage_page, dev_info.usage });
+    std.log.info("    Bus Type: {}", .{@as(HidBusType, @enumFromInt(dev_info.bus_type))});
+    std.log.debug("   Release Number: {d}", .{dev_info.release_number});
+    std.log.debug("   Interface Number: {d}", .{dev_info.interface_number});
+}
+
+fn dumpDeviceData(dev: *HidDevice) !void {
     {
         var manu_str: [255:0]c.wchar_t = undefined;
         try handleResult(c.hid_get_manufacturer_string(dev, &manu_str, manu_str.len), dev);
@@ -67,9 +141,14 @@ fn dumpData(dev: *HidDevice) !void {
     }
 }
 
+fn logResult(rc: c_int, dev: ?*HidDevice) void {
+    if (rc != 0)
+        std.log.warn("HID API error: {f}", .{fmtApiString(c.hid_error(dev))});
+}
+
 fn handleResult(rc: c_int, dev: ?*HidDevice) !void {
     if (rc != 0) {
-        std.log.warn("{f}", .{fmtApiString(c.hid_error(dev))});
+        logResult(rc, dev);
         return error.HidApiFailed;
     }
 }
@@ -79,6 +158,11 @@ pub fn fmtApiString(api_str: [*:0]const c.wchar_t) std.fmt.Alt([]const c.wchar_t
 }
 fn formatWideString(wide_str: []const c.wchar_t, writer: *std.io.Writer) std.io.Writer.Error!void {
     const unicode = std.unicode;
+
+    if (wide_str.len == 0) {
+        try writer.writeAll("<empty>");
+        return;
+    }
 
     const writeCodepoint = struct {
         fn write(codepoint: u21, buffer: []u8, len: *usize, w: *std.io.Writer) !void {

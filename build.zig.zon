@@ -14,6 +14,14 @@
             .hash = "libusb-1.0.26-qNnTWgCNFwAhSdoCWfPbt6bAgv2JMzLH4WjpMpcUlpcl",
             .lazy = true,
         },
+        // .dvui = .{
+        //     .url = "git+https://github.com/david-vanderson/dvui#3fd5bc57c22d0f76442e2cbf5a71f1941de37c5f",
+        //     .hash = "dvui-0.2.0-AQFJmTWT0gAgTtRfKXgR22bGZKfFIajr3PowLlpknEby",
+        // },
+        .args = .{
+            .url = "git+https://github.com/ikskuh/zig-args?ref=master#4c305bcb45fd3c4b74b7bf7f907cf3fc12f415a2",
+            .hash = "args-0.0.0-CiLiquDRAADuU_ueSmGquhHAuhDxxlfBokGj01ZdVYHt",
+        },
     },
     .paths = .{
         "src/main.zig",
